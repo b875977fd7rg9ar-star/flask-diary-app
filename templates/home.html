@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}日記一覧{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">日記一覧</h2>
+<a href="{{ url_for('write') }}" class="btn btn-primary mb-3">新しい日記を書く</a>
+
+{% for post in posts %}
+<div class="card mb-3">
+    <div class="card-body">
+        <h6 class="card-subtitle mb-2 text-muted">{{ post[2] }}</h6>
+        <p class="card-text">{{ post[1] }}</p>
+        <a href="{{ url_for('edit', id=post[0]) }}" class="btn btn-warning btn-sm">編集</a>
+        <a href="{{ url_for('delete', id=post[0]) }}" class="btn btn-danger btn-sm">削除</a>
+    </div>
+</div>
+{% endfor %}
+{% endblock %}
