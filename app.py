@@ -171,4 +171,7 @@ def edit(id):
     return render_template("edit.html", post=post)
 
 if __name__ == "__main__":
-    app.run()
+    # Render環境では0.0.0.0の指定とportが必要
+    import os
+    port = int(os.environ.get("PORT", 5000))  # RenderがPORTを環境変数で渡してくれる
+    app.run(host="0.0.0.0", port=port, debug=True)
