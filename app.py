@@ -125,16 +125,19 @@ def register():
     else:
         return render_template("register.html")
 
-# 削除
-@app.route("/delete/<int:id>")
+#削除
+@app.route("/delete/<int:id>", methods=["POST"])
 @login_required
 def delete(id):
+    print("削除リクエストきた:", id, current_user.id)  # ← ログ確認用
+
     conn = sqlite3.connect("diary.db")
     cur = conn.cursor()
-    # idとuser_idが一致する投稿だけ削除
-    # cur.execute("DELETE FROM diary WHERE id=? AND user_id=?", (id, current_user.id))
+    cur.execute("DELETE FROM diary WHERE id=? AND user_id=?", (id, current_user.id))
+    print("削除件数:", cur.rowcount)  # ← 成功してるか確認
     conn.commit()
     conn.close()
+
     return redirect(url_for("home"))
 
 # 編集
