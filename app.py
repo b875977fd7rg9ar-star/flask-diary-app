@@ -1,12 +1,59 @@
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-import sqlite3
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = "your_secret_key"
+
+import os
+import psycopg
+from flask import g
+
+def get_conn():
+    """リクエストごとにコネクションを確保"""
+    if "db" not in g:
+        dsn = os.environ.get("DATABASE_URL")
+        if not dsn:
+            raise RuntimeError("DATABASE_URL が設定されていません（RenderのEnvironmentで設定してね）")
+        if "sslmode=" not in dsn:
+            dsn += "?sslmode=require"
+        g.db = psycopg.connect(dsn)  # autocommit=False（デフォルト）
+    return g.db
+
+@app.teardown_appcontext
+def close_conn(_exc):
+    db = g.pop("db", None)
+    if db:
+        db.close()
+
+def ensure_schema():
+    """テーブルが無ければ作る（最初の起動で実行）"""
+    with get_conn() as conn, conn.cursor() as cur:
+        # users
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+              id SERIAL PRIMARY KEY,
+              username TEXT UNIQUE NOT NULL,
+              password TEXT NOT NULL
+            );
+        """)
+        # diary
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS diary (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              content TEXT NOT NULL,
+              created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            );
+        """)
+        conn.commit()
+
+# アプリ起動時に一度だけスキーマ確認
+with app.app_context():
+    ensure_schema()
+
 
 # Flask-Login設定
 login_manager = LoginManager()
@@ -22,11 +69,9 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    conn = sqlite3.connect("diary.db")
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE id=?", (user_id,))
-    row = cur.fetchone()
-    conn.close()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, username, password FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
     if row:
         return User(id=row[0], username=row[1], password=row[2])
     return None
@@ -38,11 +83,10 @@ def login():
         username = request.form["username"].strip()
         password = request.form["password"]
 
-        conn = sqlite3.connect("diary.db")
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE username=?", (username,))
-        row = cur.fetchone()
-        conn.close()
+        # PostgreSQL からユーザー検索
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, username, password FROM users WHERE username = %s", (username,))
+            row = cur.fetchone()
 
         if row and check_password_hash(row[2], password):
             user = User(id=row[0], username=row[1], password=row[2])
@@ -53,6 +97,7 @@ def login():
             flash("ユーザー名またはパスワードが違います。", "danger")
 
     return render_template("login.html")
+
 # ログアウト
 @app.route("/logout")
 @login_required
@@ -65,11 +110,12 @@ def logout():
 @app.route("/")
 @login_required
 def home():
-    conn = sqlite3.connect("diary.db")
-    cur = conn.cursor()
-    cur.execute("SELECT id, content, date FROM diary WHERE user_id=?", (current_user.id,))
-    posts = cur.fetchall()
-    conn.close()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, content, created_at FROM diary WHERE user_id = %s ORDER BY created_at DESC",
+            (current_user.id,)
+        )
+        posts = cur.fetchall()
     return render_template("home.html", posts=posts)
 
 # 書き込み
@@ -77,18 +123,14 @@ def home():
 @login_required
 def write():
     if request.method == "POST":
-        content = request.form["diary_entry"]
-        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        conn = sqlite3.connect("diary.db")
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO diary (content, date, user_id) VALUES (?, ?, ?)",
-            (content, date, current_user.id)
-        )
-        conn.commit()
-        conn.close()
-
+        content = request.form.get("diary_entry", "").strip()
+        if content:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO diary (user_id, content) VALUES (%s, %s)",
+                    (current_user.id, content)
+                )
+                conn.commit()
         return redirect(url_for("home"))
     return render_template("write.html")
 
@@ -107,71 +149,59 @@ def register():
         # パスワードをハッシュ化
         hashed_password = generate_password_hash(password)
 
-        # DBにユーザー登録
-        conn = sqlite3.connect("diary.db")
-        cur = conn.cursor()
-        try:
-            cur.execute("INSERT INTO users (username, password) VALUES (?, ?)",
-                        (username, hashed_password))
-            conn.commit()
-        except sqlite3.IntegrityError:
-            flash("そのユーザー名はすでに使われています", "danger")
-            conn.close()
-            return redirect("/register")
-        conn.close()
+        # PostgreSQL にユーザー登録
+        with get_conn() as conn, conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "INSERT INTO users (username, password) VALUES (%s, %s)",
+                    (username, hashed_password)
+                )
+                conn.commit()
+            except psycopg.errors.UniqueViolation:  # UNIQUE制約違反
+                conn.rollback()
+                flash("そのユーザー名はすでに使われています", "danger")
+                return redirect("/register")
 
         flash("アカウントが作成されました。ログインしてください", "success")
         return redirect("/login")
-    else:
-        return render_template("register.html")
+
+    return render_template("register.html")
 
 #削除
 @app.route("/delete/<int:id>", methods=["POST"])
 @login_required
 def delete(id):
-    print("削除リクエストきた:", id, current_user.id)  # ← ログ確認用
-
-    conn = sqlite3.connect("diary.db")
-    cur = conn.cursor()
-    cur.execute("DELETE FROM diary WHERE id=? AND user_id=?", (id, current_user.id))
-    print("削除件数:", cur.rowcount)  # ← 成功してるか確認
-    conn.commit()
-    conn.close()
-
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM diary WHERE id = %s AND user_id = %s",
+            (id, current_user.id)
+        )
+        conn.commit()
     return redirect(url_for("home"))
 
 # 編集
 @app.route("/edit/<int:id>", methods=["GET", "POST"])
 @login_required
 def edit(id):
-    conn = sqlite3.connect("diary.db")
-    cur = conn.cursor()
-
     if request.method == "POST":
-        # 入力内容を受け取って更新
-        content = request.form["diary_entry"]
+        content = request.form.get("diary_entry", "").strip()
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE diary SET content = %s WHERE id = %s AND user_id = %s",
+                (content, id, current_user.id)
+            )
+            conn.commit()
+        return redirect(url_for("home"))
+    # GET: 既存取得
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE diary SET content=? WHERE id=? AND user_id=?",
-            (content, id, current_user.id)
+            "SELECT id, content FROM diary WHERE id = %s AND user_id = %s",
+            (id, current_user.id)
         )
-        conn.commit()
-        conn.close()
-        flash("日記を更新しました！", "success")
+        row = cur.fetchone()
+    if not row:
         return redirect(url_for("home"))
-
-    # GET時は編集フォームに既存の内容を表示
-    cur.execute(
-        "SELECT * FROM diary WHERE id=? AND user_id=?",
-        (id, current_user.id)
-    )
-    post = cur.fetchone()
-    conn.close()
-
-    if not post:
-        flash("その投稿は存在しないか、編集権限がありません。", "danger")
-        return redirect(url_for("home"))
-
-    return render_template("edit.html", post=post)
+    return render_template("edit.html", post=row)
 
 if __name__ == "__main__":
     # Render環境では0.0.0.0の指定とportが必要
