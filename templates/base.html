@@ -5,6 +5,12 @@
     <title>{% block title %}日記アプリ{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<script>
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("{{ url_for('static', filename='service-worker.js') }}");
+  }
+</script>
 </head>
 <body class="bg-light">
 
