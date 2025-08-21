@@ -7,9 +7,7 @@
 
 {% for post in posts %}
 <div class="card mb-3">
-    <div class="card-body">
-        <h6 class="card-subtitle mb-2 text-muted">{{ post[2] }}</h6>
-        <p class="card-text">{{ post[1] }}</p>
+    <div class="d-flex flex-wrap gap-2">
         <a href="{{ url_for('edit', id=post[0]) }}" class="btn btn-warning btn-sm">編集</a>
         <form action="{{ url_for('delete', id=post[0]) }}" method="post" style="display:inline;">
             <button type="submit" class="btn btn-danger btn-sm">削除</button>
