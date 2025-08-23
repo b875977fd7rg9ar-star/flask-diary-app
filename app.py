@@ -12,15 +12,17 @@ import psycopg
 from flask import g
 
 def get_conn():
-    """リクエストごとにコネクションを確保"""
-    if "db" not in g:
-        dsn = os.environ.get("DATABASE_URL")
-        if not dsn:
-            raise RuntimeError("DATABASE_URL が設定されていません（RenderのEnvironmentで設定してね）")
-        if "sslmode=" not in dsn:
-            dsn += "?sslmode=require"
-        g.db = psycopg.connect(dsn)  # autocommit=False（デフォルト）
-    return g.db
+    """リクエストごとに新しいコネクションを返す"""
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL が設定されていません（RenderのEnvironmentで設定してね）")
+    if "sslmode=" not in dsn:
+        dsn += "?sslmode=require"
+    return psycopg.connect(dsn)
+
+with get_conn() as conn, conn.cursor() as cur:
+    cur.execute("SELECT ...")
+    result = cur.fetchall()
 
 @app.teardown_appcontext
 def close_conn(_exc):
