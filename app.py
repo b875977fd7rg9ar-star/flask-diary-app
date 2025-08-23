@@ -20,10 +20,6 @@ def get_conn():
         dsn += "?sslmode=require"
     return psycopg.connect(dsn)
 
-with get_conn() as conn, conn.cursor() as cur:
-    cur.execute("SELECT ...")
-    result = cur.fetchall()
-
 @app.teardown_appcontext
 def close_conn(_exc):
     db = g.pop("db", None)
