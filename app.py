@@ -71,11 +71,16 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT id, username, password FROM users WHERE id = %s", (user_id,))
-        row = cur.fetchone()
-    if row:
-        return User(id=row[0], username=row[1], password=row[2])
+    dsn = os.environ["DATABASE_URL"]
+    if "sslmode=" not in dsn:
+        dsn += "?sslmode=require"
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, username, password FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            if row:
+                return User(id=row[0], username=row[1], password=row[2])
     return None
 
 # ログイン
